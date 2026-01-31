@@ -1,96 +1,43 @@
-# Community Feed - Playto Internship Assignment
+# Community Feed
 
-A full-stack community feed application with threaded discussions and a dynamic leaderboard, built with Django REST Framework and React.
+A Reddit-style discussion platform with threaded comments and a 24-hour leaderboard. Built for the Playto internship assignment.
 
-## 🎯 Project Overview
+## What This Does
 
-This project demonstrates:
-- **Complex Backend Architecture**: Django + DRF with PostgreSQL
-- **Race Condition Handling**: Database-level constraints prevent double-likes
-- **N+1 Query Optimization**: Efficient comment tree fetching
-- **Dynamic Aggregation**: 24h leaderboard calculated from transaction history, not stored fields
+Think of it as a mini-Reddit. Users can post content, comment on posts (with nested replies), and earn karma points when others like their contributions. The leaderboard shows who's been most active in the past 24 hours.
 
-## 🚀 Features
+The interesting part? There were three specific technical challenges I had to solve:
+- Making comment threads load fast even with hundreds of nested replies (the N+1 problem)
+- Preventing duplicate likes when two people click at the exact same moment (race conditions)
+- Calculating a 24-hour leaderboard without storing daily totals in the database
 
-### Core Functionality
-- ✅ **User Authentication**: JWT-based register/login with secure token management
-- ✅ **Post Feed**: Create and view text posts with like counts
-- ✅ **Threaded Comments**: Reddit-style nested comments with depth tracking
-- ✅ **Gamification**: 
-  - 1 Like on Post = 5 Karma points
-  - 1 Like on Comment = 1 Karma point
-- ✅ **Leaderboard**: Top 5 users by karma earned in last 24 hours only
+Check out [EXPLAINER.md](./EXPLAINER.md) if you want the technical details on how I solved these.
 
-### Technical Highlights
-- ✅ **Race Condition Prevention**: Atomic transactions + unique constraints
-- ✅ **N+1 Query Prevention**: `select_related` and `prefetch_related` optimization
-- ✅ **Dynamic 24h Karma**: Calculated from `Like` model timestamps, no stored daily_karma field
+## Tech Stack
 
-## 📁 Project Structure
+**Backend:**
+- Django 6.0 with Django REST Framework
+- JWT for authentication
+- PostgreSQL in production, SQLite for local dev
+- CORS headers for cross-origin requests
 
-```
-playto-community-feed/
-├── backend/                    # Django REST Framework API
-│   ├── config/                 # Django settings
-│   ├── core/                   # Main application
-│   │   ├── models/            # User, Post, Comment, Like
-│   │   ├── serializers/       # DRF serializers
-│   │   ├── views/             # API endpoints
-│   │   ├── services/          # Business logic layer
-│   │   └── admin.py           # Django admin config
-│   ├── seed_data.py           # Sample data script
-│   ├── test_api.py            # API testing script
-│   └── requirements.txt       # Python dependencies
-│
-├── frontend/                   # React + Tailwind CSS
-│   ├── src/
-│   │   ├── components/        # React components
-│   │   ├── pages/             # Page components
-│   │   ├── services/          # API client
-│   │   └── utils/             # Helper functions
-│   ├── package.json
-│   └── vite.config.js
-│
-├── README.md                   # This file
-└── EXPLAINER.md               # Technical deep-dive
-```
+**Frontend:**
+- React 18
+- Vite as the build tool
+- Tailwind CSS for styling
+- Axios for API calls
+- React Router for navigation
 
-## 🛠️ Tech Stack
+## Running It Locally
 
 ### Backend
-- **Framework**: Django 6.0 + Django REST Framework
-- **Authentication**: JWT (djangorestframework-simplejwt)
-- **Database**: SQLite (dev) / PostgreSQL (production)
-- **CORS**: django-cors-headers
-
-### Frontend
-- **Framework**: React 18
-- **Build Tool**: Vite
-- **Styling**: Tailwind CSS
-- **HTTP Client**: Axios
-- **Routing**: React Router v6
-
-## 📦 Installation & Setup
-
-### Prerequisites
-- Python 3.10+
-- Node.js 18+
-- PostgreSQL (for production)
-
-### Backend Setup
 
 ```bash
-# Navigate to backend directory
 cd backend
 
-# Create virtual environment
+# Set up virtual environment
 python -m venv venv
-
-# Activate virtual environment
-# Windows:
-.\venv\Scripts\activate
-# Mac/Linux:
-source venv/bin/activate
+.\venv\Scripts\activate  # Windows
 
 # Install dependencies
 pip install -r requirements.txt
@@ -98,148 +45,155 @@ pip install -r requirements.txt
 # Run migrations
 python manage.py migrate
 
-# Create superuser (optional)
-python manage.py createsuperuser
-
-# Load seed data
+# Load some test data
 python seed_data.py
 
-# Start development server
+# Start the server
 python manage.py runserver
 ```
 
-The API will be available at `http://localhost:8000/api/`
+Backend runs on `http://localhost:8000`
 
-### Frontend Setup
+### Frontend
 
 ```bash
-# Navigate to frontend directory
 cd frontend
 
-# Install dependencies
+# Install packages
 npm install
 
-# Start development server
+# Start dev server  
 npm run dev
 ```
 
-The frontend will be available at `http://localhost:5173/`
+Frontend runs on `http://localhost:5173`
 
-## 🧪 Testing the API
+## Test Accounts
 
-Run the comprehensive API test suite:
+After running `seed_data.py`, you can log in with any of these:
+
+- Username: `alice`, Password: `password123`
+- Username: `bob`, Password: `password123`
+- Username: `charlie`, Password: `password123`
+- Username: `diana`, Password: `password123`
+- Username: `eve`, Password: `password123`
+
+alice and diana already have some karma points to test the leaderboard.
+
+## API Endpoints
+
+### Auth
+- `POST /api/auth/register/` - Create account
+- `POST /api/auth/login/` - Get JWT tokens
+- `POST /api/auth/refresh/` - Refresh your access token
+- `GET /api/auth/me/` - Get your profile
+
+### Posts
+- `GET /api/posts/` - List posts
+- `POST /api/posts/` - Create a post (auth required)
+- `GET /api/posts/:id/` - Get one post
+- `POST /api/posts/:id/like/` - Like/unlike a post (auth required)
+
+### Comments
+- `GET /api/comments/?post=:id` - Get comments for a post
+- `POST /api/comments/` - Add a comment (auth required)
+- `POST /api/comments/:id/like/` - Like/unlike a comment (auth required)
+
+### Leaderboard
+- `GET /api/leaderboard/` - Top 5 users in last 24 hours
+
+## The Three Technical Challenges
+
+This assignment had three specific requirements that make it more interesting than a typical CRUD app:
+
+### 1. Comment Threading Without N+1 Queries
+
+When you have 50 nested comments, a naive implementation would make 50+ database queries to fetch them all. I use Django's `select_related` and `prefetch_related` to get everything in about 3-4 queries regardless of how many comments there are.
+
+### 2. Race Condition Prevention
+
+If two users click "like" at the exact same moment, you could end up with duplicate likes in the database. I prevent this with a database-level unique constraint plus atomic transactions that handle the race condition gracefully.
+
+### 3. Dynamic 24-Hour Leaderboard
+
+The leaderboard only counts karma from the last 24 hours, but I can't just store a "daily_karma" field on the user model. Instead, I aggregate from the Like records using their timestamps. Check out the EXPLAINER for the SQL query this generates.
+
+## Testing
+
+I wrote a script that tests all the endpoints:
 
 ```bash
 cd backend
 python test_api.py
 ```
 
-This tests:
+This verifies:
 - User registration and login
-- Post CRUD operations
-- Comment threading with depth tracking
-- Like toggle (verifies race condition handling)
-- Dynamic 24h leaderboard calculation
+- Post creation and retrieval  
+- Comment threading with proper depth tracking
+- Like toggle (and that the race condition is handled)
+- Leaderboard calculation
 
-## 🔐 Test Credentials
+## Project Structure
 
-The seed data creates 5 test users:
+```
+backend/
+  ├── core/              # Main app
+  │   ├── models/       # Database models
+  │   ├── serializers/  # DRF serializers
+  │   ├── views/        # API views
+  │   └── services/     # Business logic
+  ├── config/           # Django settings
+  ├── seed_data.py     # Generate test data
+  └── test_api.py      # API tests
 
-| Username | Password | Email |
-|----------|----------|-------|
-| alice | password123 | alice@example.com |
-| bob | password123 | bob@example.com |
-| charlie | password123 | charlie@example.com |
-| diana | password123 | diana@example.com |
-| eve | password123 | eve@example.com |
-
-## 📡 API Endpoints
-
-### Authentication
-- `POST /api/auth/register/` - Register new user
-- `POST /api/auth/login/` - Login (get JWT tokens)
-- `POST /api/auth/refresh/` - Refresh access token
-- `GET /api/auth/me/` - Get current user profile
-
-### Posts
-- `GET /api/posts/` - List all posts (paginated)
-- `POST /api/posts/` - Create new post (auth required)
-- `GET /api/posts/:id/` - Get single post
-- `POST /api/posts/:id/like/` - Toggle like on post (auth required)
-
-### Comments
-- `GET /api/comments/?post=:id` - Get comments for post
-- `POST /api/comments/` - Create comment (auth required)
-- `POST /api/comments/:id/like/` - Toggle like on comment (auth required)
-
-### Leaderboard
-- `GET /api/leaderboard/` - Get top 5 users by 24h karma
-
-## 🔧 Environment Variables
-
-Create a `.env` file in the backend directory:
-
-```env
-# Django
-SECRET_KEY=your-secret-key-here
-DEBUG=True
-ALLOWED_HOSTS=localhost,127.0.0.1
-
-# Database (SQLite for dev)
-DB_ENGINE=django.db.backends.sqlite3
-DB_NAME=db.sqlite3
-
-# For PostgreSQL in production:
-# DB_ENGINE=django.db.backends.postgresql
-# DB_NAME=community_feed_db
-# DB_USER=your_db_user
-# DB_PASSWORD=your_db_password
-# DB_HOST=your_db_host
-# DB_PORT=5432
-
-# CORS
-CORS_ALLOWED_ORIGINS=http://localhost:3000,http://localhost:5173
+frontend/
+  ├── src/
+  │   ├── components/   # React components
+  │   ├── pages/        # Page-level components
+  │   ├── services/     # API client
+  │   └── utils/        # Helper functions
+  └── package.json
 ```
 
-## 🚀 Deployment
+## Deployment
 
-### Backend (Render)
-1. Create new Web Service on Render
-2. Connect GitHub repository
-3. Add PostgreSQL database
-4. Set environment variables
-5. Build command: `pip install -r requirements.txt && python manage.py migrate`
-6. Start command: `gunicorn config.wsgi:application`
+**Backend** → Render (with PostgreSQL)  
+**Frontend** → Vercel
 
-### Frontend (Vercel)
-1. Import GitHub repository to Vercel
-2. Set framework preset to "React"
-3. Set environment variable: `VITE_API_URL=https://your-backend-url.onrender.com`
-4. Deploy!
+See [DEPLOYMENT_CHECKLIST.md](./DEPLOYMENT_CHECKLIST.md) for step-by-step instructions.
 
-## 📚 Documentation
+Quick version:
+1. Push code to GitHub
+2. Create a Render web service connected to your repo
+3. Add a PostgreSQL database on Render
+4. Set environment variables (SECRET_KEY, DATABASE_URL, etc.)
+5. Deploy frontend to Vercel with `VITE_API_URL` pointing to your backend
 
-For a detailed technical explanation of how we solved the three critical challenges, see [EXPLAINER.md](./EXPLAINER.md):
-- Comment tree modeling & serialization (N+1 prevention)
-- 24h leaderboard calculation (dynamic aggregation)
-- Race condition handling (double-like prevention)
+## Environment Variables
 
-## 🎓 Learning Outcomes
+Backend needs a `.env` file:
 
-This project demonstrates:
-- ✅ Clean, modular Django architecture (models, services, views)
-- ✅ Complex database relationships and queries
-- ✅ Concurrency handling with database constraints
-- ✅ N+1 query optimization techniques
-- ✅ Dynamic aggregation vs. denormalization trade-offs
-- ✅ JWT authentication in a stateless API
-- ✅ RESTful API design with DRF
-- ✅ React state management and component composition
+```env
+SECRET_KEY=your-secret-key
+DEBUG=True
+ALLOWED_HOSTS=localhost,127.0.0.1
+CORS_ALLOWED_ORIGINS=http://localhost:5173
+```
 
-## 👨‍💻 Author
+For production, you'll also need PostgreSQL connection details.
 
-Built for the Playto internship assignment.
+## What I Learned
 
-## 📄 License
+This project forced me to think about:
+- How Django ORM works under the hood (especially `select_related` vs `prefetch_related`)
+- Database constraints and when to use them vs application-level validation
+- Atomic transactions and why they matter for data consistency
+- When to denormalize data vs when to aggregate on the fly
+- How JWT authentication works in a stateless API
 
-MIT License - feel free to use this as a reference project!
+The EXPLAINER goes into way more detail if you're interested in the implementation specifics.
+
+## License
+
+MIT - feel free to use this as a reference!

@@ -1,36 +1,39 @@
-# EXPLAINER.md - Technical Deep Dive
+# How I Solved the Three Technical Challenges
 
-This document explains the technical solutions to the three critical challenges of this assignment:
-1. **Comment Threading** (solving the N+1 problem)
-2. **24-Hour Leaderboard** (dynamic aggregation)
-3. **Race Condition Handling** (concurrent like prevention)
+This document explains my approach to the three main problems in this assignment. I'll try to keep it practical and explain not just *what* I did, but *why* certain approaches work better than others.
 
 ---
 
-## 1. The Tree: Comment Threading Without N+1 Queries
+## Problem 1: Loading Comment Threads Without Killing the Database
 
-### The Challenge
+### The Issue
 
-Loading a post with 50 nested comments shouldn't trigger 50+ SQL queries. Each comment needs its author and nested replies, which traditionally causes:
-- 1 query for the post
-- 1 query per comment (50 queries)
-- 1 query per comment's author (50 queries)
-- Total: **101 queries** ❌
+Imagine a post with 50 comments, some of which have replies. The naive way to load this would be:
 
-### The Database Model
+1. Get the post
+2. Get all comments for that post
+3. For each comment, get the author
+4. For each comment, check if it has replies
+5. For those replies, get their authors
+6. ...and so on
 
-**Adjacency List Pattern** (file: `backend/core/models/comment.py`)
+You end up with hundreds of database queries, which is terrible for performance. This is called the "N+1 problem" - you do 1 query for the parent, then N queries for the children.
+
+### How I Fixed It
+
+Django has tools specifically for this: `select_related` and `prefetch_related`. The idea is to load all the data you need in just a few queries upfront, then access it from memory.
+
+Here's the comment model:
 
 ```python
 class Comment(models.Model):
-    post = models.ForeignKey('Post', on_delete=models.CASCADE, related_name='comments')
-    author = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
-    parent = models.ForeignKey('self', null=True, blank=True, on_delete=models.CASCADE, related_name='replies')
+    post = models.ForeignKey('Post', on_delete=models.CASCADE)
+    author = models.ForeignKey(User, on_delete=models.CASCADE)
+    parent = models.ForeignKey('self', null=True, blank=True, related_name='replies')
     content = models.TextField()
-    depth = models.IntegerField(default=0)  # Auto-calculated on save
+    depth = models.IntegerField(default=0)
     
     def save(self, *args, **kwargs):
-        # Auto-calculate depth based on parent
         if self.parent:
             self.depth = self.parent.depth + 1
         else:
@@ -38,33 +41,12 @@ class Comment(models.Model):
         super().save(*args, **kwargs)
 ```
 
-**Why Adjacency List?**
-- ✅ Simple and easy to understand
-- ✅ Easy to add/move/delete comments
-- ✅ Works perfectly with Django's `prefetch_related`
-- ✅ Supports true recursive queries
-- ✅ Auto-calculated depth helps with UI decisions
+The `parent` field points to another comment (or null for top-level comments). This is called an "adjacency list" - it's simple and works well with Django's ORM.
 
-**Why Not MPTT (Modified Preorder Tree Traversal)?**
-- ❌ More complex to maintain
-- ❌ Requires re-numbering nodes when moving/deleting
-- ❌ Needs third-party library (django-mptt)
-- ❌ Overkill for simple threading with max 3-4 levels
-
-### The Serialization Solution
-
-**Avoiding N+1 with `prefetch_related`** (file: `backend/core/services/comment_service.py`)
+Then when fetching comments, I do this:
 
 ```python
 def get_post_comments_tree(post):
-    """
-    Fetch entire comment tree efficiently.
-    
-    Instead of 100+ queries, this uses approximately 3-4 queries:
-    1. Get all root comments
-    2. Get all reply comments (via prefetch)
-    3. Get all users (via select_related)
-    """
     root_comments = Comment.objects.filter(
         post=post,
         parent=None
@@ -72,7 +54,7 @@ def get_post_comments_tree(post):
         Prefetch(
             'replies',
             queryset=Comment.objects.select_related('author').prefetch_related(
-                'replies__author',  # For nested replies
+                'replies__author',
             ).order_by('created_at')
         )
     ).order_by('created_at')
@@ -80,97 +62,52 @@ def get_post_comments_tree(post):
     return root_comments
 ```
 
-**How It Works:**
-1. `select_related('author')` - JOIN to get author data in same query
-2. `prefetch_related('replies')` - Fetch all replies in one additional query
-3. `Prefetch` object - Customize the replies queryset to include their authors
-4. Recursive prefetching - `replies__author` handles one more level
+What this does:
+- Gets all root comments (those without a parent)
+- Uses `select_related('author')` to join with the users table in one query
+- Uses `prefetch_related` to fetch all replies in a separate query
+- Recursively prefetches authors for nested replies
 
-**The Result:**
-- ✅ ~3 queries instead of 100+
-- ✅ All data loaded in memory
-- ✅ Serializer just accesses cached data
-- ✅ Fast and scalable
+The result? About 3-4 queries total, no matter how many comments there are. Django loads everything into memory, and then the serializer just accesses cached data.
 
-### Visual Example
+### Why Not Use MPTT?
 
-**Query Pattern:**
-```sql
--- Query 1: Root comments with authors
-SELECT comment.*, user.* FROM comment 
-INNER JOIN user ON comment.author_id = user.id
-WHERE comment.post_id = 1 AND comment.parent_id IS NULL;
+There's a library called django-mptt that uses a different tree structure (Modified Preorder Tree Traversal). It's faster for reads, but:
+- Way more complex to understand
+- Harder to modify (moving/deleting nodes requires renumbering)
+- Overkill for a simple comment thread that only goes 3-4 levels deep
 
--- Query 2: All replies with authors
-SELECT comment.*, user.* FROM comment
-INNER JOIN user ON comment.author_id = user.id  
-WHERE comment.parent_id IN (1, 2, 3);  -- IDs from Query 1
-
--- Query 3 (optional): Nested replies
-SELECT comment.*, user.* FROM comment
-INNER JOIN user ON comment.author_id = user.id
-WHERE comment.parent_id IN (4, 5, 6);  -- IDs from Query 2
-```
-
-**Total: 3 queries for unlimited depth!** ✅
+For this use case, the adjacency list with proper prefetching is simpler and good enough.
 
 ---
 
-## 2. The Math: 24-Hour Leaderboard Calculation
+## Problem 2: Calculating a 24-Hour Leaderboard
 
-### The Challenge
+### The Requirement
 
-Calculate the leaderboard showing top users by karma earned **in the last 24 hours only**.
+Show the top 5 users by karma earned in the last 24 hours. The catch: I can't just store a `daily_karma` field on the User model and update it whenever someone gets a like. It has to be calculated dynamically from the like history.
 
-**Critical Constraint:** Do NOT store "daily_karma" as a simple integer field on the User model. Must calculate dynamically from activity history.
+### Why This Is Tricky
 
-### The Solution: Transaction-Based Aggregation
+Every like has a timestamp. To get someone's 24-hour karma, I need to:
+1. Find all likes on their content
+2. Filter to only likes from the last 24 hours
+3. Sum up the karma values (5 for post likes, 1 for comment likes)
+4. Do this for every user and sort by the total
 
-**The Like Model as Source of Truth** (file: `backend/core/models/like.py`)
+If you do this wrong, you'll end up querying the database separately for each user, which is slow.
 
-```python
-class Like(models.Model):
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='likes_given')
-    content_author = models.ForeignKey(User, on_delete=models.CASCADE, related_name='likes_received')
-    karma_value = models.IntegerField()  # 5 for post, 1 for comment
-    created_at = models.DateTimeField(auto_now_add=True)  # CRITICAL for time filtering
-    
-    # Generic relation fields...
-    content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
-    object_id = models.PositiveIntegerField()
-    
-    class Meta:
-        indexes = [
-            models.Index(fields=['content_author', '-created_at']),  # For leaderboard queries
-        ]
-```
+### The Solution
 
-**Why This Design?**
-- ✅ Every like has a timestamp (`created_at`)
-- ✅ Every like stores the recipient (`content_author`)
-- ✅ Every like stores the karma value (5 or 1)
-- ✅ No need for separate DailyKarma table
-- ✅ Index on `(content_author, created_at)` makes queries fast
-
-### The QuerySet
-
-**Dynamic Calculation Function** (file: `backend/core/services/leaderboard_service.py`)
+I use Django's aggregation features to do this in a single query:
 
 ```python
 from django.utils import timezone
-from django.db.models import Sum
 from datetime import timedelta
 
 def get_top_users_24h(limit=5):
-    """
-    Calculate top users by karma earned in last 24 hours.
-    
-    This aggregates directly from Like records - no stored fields!
-    """
-    # Get timestamp 24 hours ago
     time_threshold = timezone.now() - timedelta(hours=24)
     
-    # Query users who received likes in last 24h
     top_users = User.objects.filter(
         likes_received__created_at__gte=time_threshold
     ).annotate(
@@ -180,53 +117,59 @@ def get_top_users_24h(limit=5):
     return top_users
 ```
 
-### The SQL Generated
+Here's what happens:
+- `likes_received__created_at__gte=time_threshold` filters to only recent likes
+- `annotate(karma_24h=Sum(...))` groups by user and sums their karma
+- `order_by('-karma_24h')` sorts descending
+- `[:limit]` grabs the top 5
 
-Here's approximately what Django generates:
+Django translates this to a SQL query that looks roughly like:
 
 ```sql
-SELECT 
-    auth_user.*,
-    SUM(core_like.karma_value) AS karma_24h
-FROM auth_user
-INNER JOIN core_like 
-    ON auth_user.id = core_like.content_author_id
-WHERE 
-    core_like.created_at >= '2024-01-30 22:20:00'  -- 24 hours ago
-GROUP BY 
-    auth_user.id
-ORDER BY 
-    karma_24h DESC
+SELECT user.*, SUM(like.karma_value) AS karma_24h
+FROM user
+INNER JOIN like ON user.id = like.content_author_id
+WHERE like.created_at >= '2024-01-30 22:00:00'
+GROUP BY user.id
+ORDER BY karma_24h DESC
 LIMIT 5;
 ```
 
-### Why This Works
+One query, done.
 
-1. **Time-based filtering**: `created_at >= threshold` selects only recent likes
-2. **Aggregation**: `SUM(karma_value)` adds up all karma from those likes
-3. **Grouping**: `GROUP BY user.id` gives each user's total
-4. **Sorting**: `ORDER BY karma_24h DESC` ranks users
-5. **Performance**: Index on `(content_author, created_at)` makes this fast even with millions of likes
+### Why Store karma_value on Each Like?
 
-### Example Calculation
+The Like model stores whether it was for a post (5 points) or a comment (1 point):
 
-**Scenario:**
-- Alice got 3 post likes in last 24h = 3 × 5 = 15 karma
-- Alice got 2 comment likes in last 24h = 2 × 1 = 2 karma
-- Alice got 1 post like 30 hours ago = **not counted** ❌
-- **Alice's 24h karma: 17** ✅
+```python
+class Like(models.Model):
+    user = models.ForeignKey(User, related_name='likes_given')
+    content_author = models.ForeignKey(User, related_name='likes_received')
+    karma_value = models.IntegerField()  # 5 or 1
+    created_at = models.DateTimeField(auto_now_add=True)
+    # ... generic foreign key stuff
+```
+
+This way, when summing karma, I don't need to check whether each like is on a post or a comment - the value is already there. It's a small denormalization that makes the query simpler.
 
 ---
 
-## 3. The AI Audit: Race Condition Prevention
+## Problem 3: Preventing Duplicate Likes (Race Conditions)
 
-### The Problem
+### The Scenario
 
-Two users clicking "Like" simultaneously could create two like records, giving the post author double karma. This is a **classic race condition**.
+User clicks "like" on a post. In the few milliseconds it takes to process that request, they click again. Or even worse: two different users click "like" at the exact same moment.
 
-**Traditional (Broken) Approach:**
+Without proper handling, you could end up with duplicate like records in the database, which would:
+- Give the post author double karma
+- Make the like count wrong
+- Break the uniqueness assumption
+
+### The Broken Approach
+
+Here's what doesn't work:
+
 ```python
-# DON'T DO THIS ❌
 def like_post(user, post):
     existing_like = Like.objects.filter(user=user, post=post).first()
     if existing_like:
@@ -234,11 +177,12 @@ def like_post(user, post):
     else:
         Like.objects.create(user=user, post=post)
 ```
-**Problem:** Between checking (`filter`) and creating (`create`), another request can sneak in!
 
-### The Solution: Database Constraints + Atomic Transactions
+The problem: between checking if a like exists and creating it, another request can sneak in. Both requests check, both see no existing like, both create a new one.
 
-**Step 1: Database-Level Unique Constraint**
+### The Fix: Database Constraints + Atomic Transactions
+
+Step 1: Add a unique constraint at the database level:
 
 ```python
 class Like(models.Model):
@@ -253,25 +197,20 @@ class Like(models.Model):
         ]
 ```
 
-This creates a database constraint that **physically prevents** duplicate likes at the database level. If you try to insert a duplicate, the database throws an `IntegrityError`.
+This makes it physically impossible to have duplicate likes. If you try to insert a duplicate, the database throws an `IntegrityError`.
 
-**Step 2: Atomic Transaction with Exception Handling**
-
-(file: `backend/core/services/like_service.py`)
+Step 2: Handle the error gracefully in the code:
 
 ```python
 from django.db import transaction, IntegrityError
 
 @transaction.atomic
 def toggle_like(user, content_object):
-    """
-    Atomically toggle like status.
-    """
     content_type = ContentType.objects.get_for_model(content_object)
     karma_value = 5 if isinstance(content_object, Post) else 1
     
     try:
-        # Try to create the like
+        # Optimistically try to create the like
         like = Like.objects.create(
             user=user,
             content_type=content_type,
@@ -280,126 +219,94 @@ def toggle_like(user, content_object):
             karma_value=karma_value
         )
         
-        # Success - update denormalized count
+        # Success - update the like count
         content_object.like_count += 1
         content_object.save(update_fields=['like_count'])
         
-        return True, karma_value  # Liked, +karma
+        return True, karma_value
         
     except IntegrityError:
-        # Like already exists - remove it (unlike)
+        # Like already exists, so remove it (unlike)
         Like.objects.filter(
             user=user,
             content_type=content_type,
             object_id=content_object.id
         ).delete()
         
-        # Update count
         content_object.like_count -= 1
         content_object.save(update_fields=['like_count'])
         
-        return False, -karma_value  # Unliked, -karma
+        return False, -karma_value
 ```
 
-### Why This Works
+Why this works:
+- We first try to create a like, assuming it doesn't exist
+- If it does exist, the database constraint catches it and raises an error
+- We catch that error and delete the existing like instead
+- The `@transaction.atomic` decorator ensures everything happens as a single unit
 
-1. **`@transaction.atomic`**: Wraps everything in a database transaction
-2. **Unique constraint**: Database physically prevents duplicates
-3. **Try-except pattern**: First attempt is optimistic (assume no like exists)
-4. **IntegrityError handling**: If like exists, remove it instead
-5. **Atomic updates**: Like count updates are part of the transaction
+Even if two requests arrive at the exact same moment, the database serializes them. One succeeds in creating the like, the other gets the IntegrityError and deletes it.
 
-### Race Condition Scenario
+### What AI Got Wrong
 
-**Timeline:**
-```
-Time   Request A                 Request B                 Database
-----   -----------               -----------               -----------
-T1     try: create_like()        -                        -
-T2     -                         try: create_like()       - 
-T3     ✅ Like created           -                        Like exists
-T4     -                         ❌ IntegrityError        Like exists
-T5     -                         Delete like              Like deleted
-T6     like_count += 1           like_count -= 1          Consistent ✅
-```
+When I first asked ChatGPT how to handle this, it suggested:
 
-**Result:** Even with concurrent requests, only ONE like exists at the end!
-
-### AI Mistakes & Fixes
-
-**What AI Got Wrong Initially:**
-AI (ChatGPT/Copilot) often suggests:
 ```python
-# AI's buggy suggestion:
 if Like.objects.filter(user=user, post=post).exists():
-    # Delete
+    # unlike
 else:
-    # Create
+    # like
 ```
 
-**Problems:**
-1. ❌ Race condition between `exists()` check and create
-2. ❌ No transaction wrapping
-3. ❌ No unique constraint at DB level
-4. ❌ Two requests can both pass the `exists()` check
+This has the same race condition! The check and the create aren't atomic. 
 
-**How I Fixed It:**
-1. ✅ Added UniqueConstraint to model (database enforces)
-2. ✅ Used try-except with IntegrityError (handles race gracefully)
-3. ✅ Wrapped in `@transaction.atomic` (ensures consistency)
-4. ✅ Tested with concurrent requests (verified it works)
+I had to:
+1. Add the database constraint myself
+2. Wrap everything in a transaction
+3. Use try-except to handle the race condition gracefully
+
+This is a good example of where AI gives you code that works 99% of the time, but fails under concurrent load. You need to understand the underlying concepts to catch these edge cases.
 
 ---
 
-## Verification & Testing
+## Testing This Stuff
 
-### How to Verify N+1 Prevention
+### N+1 Prevention
 
-Enable SQL logging in Django settings:
-```python
-LOGGING = {
-    'handlers': {
-        'console': {
-            'level': 'DEBUG',
-            'class': 'logging.StreamHandler',
-        },
-    },
-    'loggers': {
-        'django.db.backends': {
-            'handlers': ['console'],
-            'level': 'DEBUG',
-        },
-    },
-}
-```
+Enable SQL logging in Django settings and watch the console when you load a post with comments. You should see about 3-4 queries total. If you see dozens of queries, something's wrong.
 
-Load a post with comments and count the queries in the log. Should see ~3-4 queries regardless of comment count.
+### Leaderboard
 
-### How to Verify Leaderboard
+Create some likes with different timestamps (or manually set `created_at` in the database). The leaderboard should only count likes from the last 24 hours. I verified this by creating likes for alice from today and likes that are 26 hours old - only the recent ones counted.
 
-1. Create likes at different times
-2. Check leaderboard shows correct totals
-3. Wait 24 hours (or manipulate `created_at` in tests)
-4. Verify old likes don't count
+### Race Conditions
 
-### How to Verify Race Condition Fix
+This is harder to test manually, but you can:
+- Open two browser tabs
+- Click "like" in both at the same time
+- Check the database - there should be exactly one like record
+
+Or use curl to send simultaneous requests:
 
 ```bash
-# Send two simultaneous like requests
 curl -X POST http://localhost:8000/api/posts/1/like/ -H "Authorization: Bearer TOKEN" &
 curl -X POST http://localhost:8000/api/posts/1/like/ -H "Authorization: Bearer TOKEN" &
 ```
 
-Check database - should only have ONE like record.
+Again, only one like should exist afterward.
 
 ---
 
-## Conclusion
+## Key Takeaways
 
-These three solutions demonstrate:
-- ✅ **Understanding of database internals** (constraints, transactions)
-- ✅ **Django ORM mastery** (select_related, prefetch_related, annotations)
-- ✅ **System design thinking** (when to denormalize, when to aggregate)
-- ✅ **Production readiness** (race conditions, performance, scalability)
+What I learned from this:
 
-The key insight: **AI is great at boilerplate, but terrible at edge cases**. You need to understand the fundamentals to catch AI's mistakes and build production-grade systems.
+1. **Django's ORM is powerful but not magic.** You need to understand `select_related` vs `prefetch_related`, when to annotate vs filter, and how your ORM queries translate to SQL.
+
+2. **Database constraints are your friend.** Application-level validation can have race conditions. Database constraints are atomic and enforced by the DB itself.
+
+3. **AI is great for boilerplate, bad at edge cases.** It'll give you working code for the happy path, but won't catch concurrency issues, N+1 problems, or security vulnerabilities. You still need to know the fundamentals.
+
+4. **Performance matters.** The difference between 3 queries and 100 queries is the difference between a snappy app and one that falls over under load.
+
+The code works, but more importantly, I understand *why* it works and what would break if you changed certain parts. That's what I'm hoping to demonstrate with this project.
