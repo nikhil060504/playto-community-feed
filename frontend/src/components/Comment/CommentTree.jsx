@@ -40,14 +40,14 @@ export default function CommentTree({ comment, postId, onUpdate, depth = 0 }) {
         <div className="flex items-start justify-between mb-3">
           <div className="flex items-center space-x-2">
             <div className="w-8 h-8 bg-gradient-to-br from-green-400 to-blue-500 rounded-full flex items-center justify-center text-white text-sm font-bold">
-              {currentComment.author.username[0].toUpperCase()}
+              {currentComment?.author?.username?.[0]?.toUpperCase() || '?'}
             </div>
             <div>
               <p className="text-sm font-medium text-gray-900">
-                {currentComment.author.username}
+                {currentComment?.author?.username || 'Unknown'}
               </p>
               <p className="text-xs text-gray-500">
-                {new Date(currentComment.created_at).toLocaleString()} • Depth: {currentComment.depth}
+                {currentComment?.created_at ? new Date(currentComment.created_at).toLocaleString() : 'Unknown date'} • Depth: {currentComment?.depth ?? 0}
               </p>
             </div>
           </div>
@@ -55,7 +55,7 @@ export default function CommentTree({ comment, postId, onUpdate, depth = 0 }) {
 
         {/* Content */}
         <p className="text-gray-800 mb-3">
-          {currentComment.content}
+          {currentComment?.content || ''}
         </p>
 
         {/* Actions */}
@@ -64,17 +64,17 @@ export default function CommentTree({ comment, postId, onUpdate, depth = 0 }) {
             onClick={handleLike}
             disabled={liking}
             className={`flex items-center space-x-1 px-3 py-1 rounded text-sm transition ${
-              currentComment.is_liked
+              currentComment?.is_liked
                 ? 'bg-red-50 text-red-600'
                 : 'bg-gray-50 text-gray-600 hover:bg-gray-100'
             }`}
           >
-            <span>{currentComment.is_liked ? '❤️' : '🤍'}</span>
-            <span>{currentComment.like_count}</span>
+            <span>{currentComment?.is_liked ? '❤️' : '🤍'}</span>
+            <span>{currentComment?.like_count ?? 0}</span>
           </button>
 
           {/* Only allow replies if depth is less than 4 to keep it simple */}
-          {currentComment.depth < 4 && (
+          {(currentComment?.depth ?? 0) < 4 && (
             <button
               onClick={() => setShowReplyForm(!showReplyForm)}
               className="text-sm text-blue-600 hover:text-blue-700 font-medium"
