@@ -31,7 +31,10 @@ export default function PostDetailPage() {
     try {
       const { data } = await commentsAPI.getByPost(id);
       // Handle both array response and paginated response with 'results'
-      setComments(Array.isArray(data) ? data : (data?.results || []));
+      const comments = Array.isArray(data) ? data : (data?.results || []);
+      // Filter out any invalid comments that might cause crashes
+      const validComments = comments.filter(c => c && c.id && c.author);
+      setComments(validComments);
     } catch (error) {
       console.error('Failed to load comments:', error);
       setComments([]); // Set empty array on error
