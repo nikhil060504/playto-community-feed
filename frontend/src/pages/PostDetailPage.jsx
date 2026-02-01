@@ -30,9 +30,11 @@ export default function PostDetailPage() {
   const loadComments = async () => {
     try {
       const { data } = await commentsAPI.getByPost(id);
-      setComments(data);
+      // Handle both array response and paginated response with 'results'
+      setComments(Array.isArray(data) ? data : (data?.results || []));
     } catch (error) {
       console.error('Failed to load comments:', error);
+      setComments([]); // Set empty array on error
     }
   };
 
