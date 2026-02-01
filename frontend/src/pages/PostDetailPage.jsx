@@ -99,21 +99,21 @@ export default function PostDetailPage() {
           {/* Author Info */}
           <div className="flex items-center space-x-3 mb-4">
             <div className="w-12 h-12 bg-gradient-to-br from-blue-400 to-purple-500 rounded-full flex items-center justify-center text-white font-bold text-lg">
-              {post.author.username[0].toUpperCase()}
+              {post?.author?.username?.[0]?.toUpperCase() || '?'}
             </div>
             <div>
               <p className="font-medium text-gray-900">
-                {post.author.username}
+                {post?.author?.username || 'Unknown'}
               </p>
               <p className="text-sm text-gray-500">
-                {new Date(post.created_at).toLocaleString()}
+                {post?.created_at ? new Date(post.created_at).toLocaleString() : 'Unknown date'}
               </p>
             </div>
           </div>
 
           {/* Content */}
           <p className="text-gray-800 text-lg mb-6 whitespace-pre-wrap">
-            {post.content}
+            {post?.content || ''}
           </p>
 
           {/* Actions */}
@@ -121,13 +121,13 @@ export default function PostDetailPage() {
             <button
               onClick={handleLike}
               className={`flex items-center space-x-2 px-4 py-2 rounded-lg transition ${
-                post.is_liked
+                post?.is_liked
                   ? 'bg-red-50 text-red-600 hover:bg-red-100'
                   : 'bg-gray-50 text-gray-600 hover:bg-gray-100'
               }`}
             >
-              <span className="text-lg">{post.is_liked ? '❤️' : '🤍'}</span>
-              <span className="font-medium">{post.like_count}</span>
+              <span className="text-lg">{post?.is_liked ? '❤️' : '🤍'}</span>
+              <span className="font-medium">{post?.like_count ?? 0}</span>
             </button>
 
             <div className="flex items-center space-x-2 text-gray-600">
@@ -138,7 +138,7 @@ export default function PostDetailPage() {
         </div>
 
         {/* Create Comment */}
-        <CreateComment postId={post.id} onCommentCreated={handleCommentCreated} />
+        {post?.id && <CreateComment postId={post.id} onCommentCreated={handleCommentCreated} />}
 
         {/* Comments */}
         <div className="mt-6 space-y-4">
