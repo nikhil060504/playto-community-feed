@@ -48,10 +48,10 @@ export default function FeedPage() {
             <div className="flex items-center space-x-4">
               <div className="text-right">
                 <p className="text-sm font-medium text-gray-900">
-                  {currentUser?.username}
+                  {currentUser?.username || 'Guest'}
                 </p>
                 <p className="text-xs text-gray-500">
-                  {currentUser?.karma_24h || 0} karma (24h)
+                  {currentUser?.karma_24h ?? 0} karma (24h)
                 </p>
               </div>
               <button
