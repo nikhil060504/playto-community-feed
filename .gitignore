@@ -46,10 +46,5 @@ Thumbs.db
 
 # Testing
 .coverage
-htmlcov/
-.pytest_cache/
-
+# Artifacts and extra docs (not needed in repo)
 DEPLOYMENT.md
-DOCKER_SETUP.md
-DEPLOYMENT_CHECKLIST.md
-DEBUG_RENDER.md
